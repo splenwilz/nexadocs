@@ -65,6 +65,31 @@ class WorkOSOrganizationService:
                 raise
             return response.json()
 
+    async def delete_organization(self, organization_id: str) -> None:
+        """
+        Delete a WorkOS organization.
+
+        Reference: https://workos.com/docs/reference/authkit/authentication-errors/organization-authentication-required-error
+        """
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.delete(
+                f"{self._BASE_URL}/{organization_id}",
+                headers=headers,
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "WorkOS organization deletion failed: %s",
+                    exc.response.text,
+                )
+                raise
+
     async def create_organization_membership(
         self,
         user_id: str,

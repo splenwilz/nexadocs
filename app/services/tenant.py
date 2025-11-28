@@ -244,22 +244,44 @@ class TenantService:
         unique_slug = await self._generate_unique_slug(db, slug_seed)
 
         # Provision the WorkOS organization before writing to our DB.
+        # If DB insert fails, we'll clean up the orphaned WorkOS org.
         workos_org = await self.workos_orgs.create_organization(name=name, domains=domains)
+        workos_org_id = workos_org["id"]
 
         tenant = Tenant(
             name=name,
             slug=unique_slug,
-            workos_organization_id=workos_org["id"],
+            workos_organization_id=workos_org_id,
             is_active=True,
         )
 
-        db.add(tenant)
-        await db.flush()
+        try:
+            db.add(tenant)
+            await db.flush()
+        except Exception as db_error:
+            # Database operation failed - clean up orphaned WorkOS organization
+            # This prevents orphaned organizations if DB insert fails (constraint violation, connection issue, etc.)
+            logger.warning(
+                f"Database insert failed after WorkOS organization creation for tenant '{name}'. "
+                f"Cleaning up orphaned WorkOS organization {workos_org_id}. Error: {db_error}"
+            )
+            try:
+                await self.workos_orgs.delete_organization(workos_org_id)
+                logger.info(f"Successfully cleaned up orphaned WorkOS organization {workos_org_id}")
+            except Exception as cleanup_error:
+                # Log cleanup failure but don't mask the original error
+                logger.error(
+                    f"Failed to clean up orphaned WorkOS organization {workos_org_id} after DB failure. "
+                    f"Cleanup error: {cleanup_error}. Original error: {db_error}",
+                    exc_info=True
+                )
+            # Re-raise the original database error
+            raise
 
         logger.info(
             "Provisioned tenant %s with WorkOS org %s",
             tenant.id,
-            workos_org["id"],
+            workos_org_id,
         )
         return tenant
 
