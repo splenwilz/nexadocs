@@ -78,7 +78,7 @@ NexaDocs is a **multi-tenant AI knowledge assistant** that provides:
 
 ### Architecture
 
-```
+```plaintext
 ┌─────────────────────────────────────────────────────────┐
 │                    FastAPI Backend                      │
 ├─────────────────────────────────────────────────────────┤
@@ -103,7 +103,7 @@ NexaDocs is a **multi-tenant AI knowledge assistant** that provides:
 
 ## Project Structure
 
-```
+```plaintext
 nexadocs/
 ├── app/
 │   ├── main.py                    # FastAPI application entry point
@@ -231,13 +231,13 @@ CREATE DATABASE nexadocs;
 
 ### 4. Setup Qdrant (Vector Database)
 
-**Option A: Local Qdrant (Docker)**
+#### Option A: Local Qdrant (Docker)
 ```bash
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-**Option B: Qdrant Cloud**
-- Sign up at https://cloud.qdrant.io
+#### Option B: Qdrant Cloud
+- Sign up at [https://cloud.qdrant.io](https://cloud.qdrant.io)
 - Create a cluster and get your API key
 - Set `QDRANT_URL` and `QDRANT_API_KEY` in `.env`
 
@@ -262,15 +262,15 @@ uv run uvicorn app.main:app --reload
 ```
 
 The API will be available at:
-- API: http://localhost:8000
-- Docs: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- API: [http://localhost:8000](http://localhost:8000)
+- Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- ReDoc: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ### API Documentation
 
 Once the server is running, access the interactive API documentation:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
 ### Quick Test
 

@@ -132,41 +132,13 @@ class TenantService:
         
         # Create new tenant
         # Generate slug from organization_name or use workos_organization_id
-        max_length = 100  # Database column limit
+        # Use _generate_unique_slug for consistency and race-safety
         if organization_name:
-            # Generate slug from name: "Acme Corp" -> "acme-corp"
-            slug = organization_name.lower().replace(" ", "-").replace("_", "-")
-            # Remove special characters, keep only alphanumeric and hyphens
-            slug = re.sub(r'[^a-z0-9-]', '', slug)
-            # Fallback to WorkOS org ID if slug ends up empty
-            if not slug:
-                slug = workos_organization_id.replace("org_", "org-")
+            slug_seed = organization_name
         else:
-            # Fallback: use workos_organization_id as slug (sanitized)
-            slug = workos_organization_id.replace("org_", "org-")
+            slug_seed = workos_organization_id.replace("org_", "org-")
         
-        # Enforce maximum length before uniqueness checks
-        # Truncate to leave room for counter suffix (e.g., "-123")
-        # Reserve space for counter to prevent infinite loop when slug is exactly max_length
-        slug = slug[:max_length]
-        
-        # Ensure slug is unique by appending suffix if needed
-        base_slug = slug
-        counter = 1
-        while True:
-            existing = await self.get_tenant_by_slug(db, slug)
-            if not existing:
-                break
-            # Append counter - if base_slug is max_length, truncate it to leave room
-            # This prevents infinite loop when base_slug is exactly 100 chars
-            if len(base_slug) >= max_length:
-                # Truncate base_slug to leave room for "-{counter}"
-                base_slug = base_slug[:max_length - len(str(counter)) - 1]
-            slug = f"{base_slug}-{counter}"
-            # Final safety check: ensure slug doesn't exceed max_length
-            if len(slug) > max_length:
-                slug = slug[:max_length]
-            counter += 1
+        slug = await self._generate_unique_slug(db, slug_seed)
         
         tenant = Tenant(
             name=organization_name or f"Organization {workos_organization_id}",
@@ -178,9 +150,9 @@ class TenantService:
         db.add(tenant)
         try:
             await db.flush()
-        except IntegrityError:
+        except IntegrityError as e:
             # Race condition: another request created the tenant concurrently
-            # Rollback this transaction and return the existing tenant
+            # This can happen for both workos_organization_id and slug conflicts
             await db.rollback()
             logger.info(
                 f"Tenant creation race condition detected for WorkOS org {workos_organization_id}. "
@@ -191,8 +163,12 @@ class TenantService:
             if existing_tenant:
                 logger.info(f"Returning existing tenant {existing_tenant.id} created by concurrent request")
                 return existing_tenant
-            # If tenant still doesn't exist after rollback, re-raise the IntegrityError
-            # This handles the edge case where both workos_organization_id and slug conflict
+            # If tenant still doesn't exist, it might be a slug conflict for a different org
+            # Re-raise the IntegrityError to let the caller handle it
+            logger.warning(
+                f"IntegrityError during tenant creation for org {workos_organization_id}, "
+                f"but tenant not found on re-query. This may be a slug conflict. Error: {e}"
+            )
             raise
         
         logger.info(f"Created tenant: {tenant.id} ({tenant.name}) for WorkOS organization {workos_organization_id}")
@@ -338,20 +314,28 @@ class TenantService:
         # Truncate to leave room for counter suffix (e.g., "-123")
         slug = slug[:max_length]
 
+        # Ensure slug is unique by appending suffix if needed
+        # Use base variable to preserve original slug during iteration
+        base = slug
         candidate = slug
         counter = 1
         while True:
             existing = await self.get_tenant_by_slug(db, candidate)
             if not existing:
+                # Strip trailing hyphens that might result from truncation
+                candidate = candidate.rstrip("-")
                 return candidate
-            # Append counter - if slug is max_length, truncate it to leave room
-            # This prevents infinite loop when slug is exactly 100 chars
-            if len(slug) >= max_length:
-                slug = slug[:max_length - len(str(counter)) - 1]
-            candidate = f"{slug}-{counter}"
+            # Append counter - if base is max_length, truncate it to leave room
+            # This prevents infinite loop when base is exactly 100 chars
+            if len(base) >= max_length:
+                # Truncate to leave room for "-{counter}"
+                base = base[:max_length - len(str(counter)) - 1]
+            candidate = f"{base}-{counter}"
+            # Strip trailing hyphens that might result from truncation
+            candidate = candidate.rstrip("-")
             # Final safety check: ensure candidate doesn't exceed max_length
             if len(candidate) > max_length:
-                candidate = candidate[:max_length]
+                candidate = candidate[:max_length].rstrip("-")
             counter += 1
     
     async def update_tenant(
