@@ -315,8 +315,8 @@ class TenantService:
         slug = slug[:max_length]
 
         # Ensure slug is unique by appending suffix if needed
-        # Use base variable to preserve original slug during iteration
-        base = slug
+        # Preserve original slug for consistent truncation calculations
+        base_slug = slug  # Preserve original for consistent truncation
         candidate = slug
         counter = 1
         while True:
@@ -325,12 +325,15 @@ class TenantService:
                 # Strip trailing hyphens that might result from truncation
                 candidate = candidate.rstrip("-")
                 return candidate
-            # Append counter - if base is max_length, truncate it to leave room
-            # This prevents infinite loop when base is exactly 100 chars
-            if len(base) >= max_length:
+            # Append counter - calculate truncation based on original base_slug and current counter
+            # This prevents infinite loop when base_slug is exactly 100 chars
+            if len(base_slug) >= max_length:
                 # Truncate to leave room for "-{counter}"
-                base = base[:max_length - len(str(counter)) - 1]
-            candidate = f"{base}-{counter}"
+                truncated_base = base_slug[:max_length - len(str(counter)) - 1].rstrip("-")
+                candidate = f"{truncated_base}-{counter}"
+            else:
+                # Base slug is short enough, just append counter
+                candidate = f"{base_slug}-{counter}"
             # Strip trailing hyphens that might result from truncation
             candidate = candidate.rstrip("-")
             # Final safety check: ensure candidate doesn't exceed max_length
