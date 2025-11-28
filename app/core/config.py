@@ -86,6 +86,94 @@ class Settings(BaseSettings):
         raise ValueError(
             "WORKOS_ALLOWED_REDIRECT_URIS must be a JSON array or comma-separated string"
         )
+    # S3 Storage Configuration
+    # All documents are stored in Amazon S3
+    # Reference: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html
+    S3_BUCKET_NAME: str = Field(
+        ...,
+        description="S3 bucket name for document storage (required)"
+    )
+    AWS_REGION: str = Field(
+        default="us-east-1",
+        description="AWS region for S3 bucket (default: us-east-1)"
+    )
+    AWS_ACCESS_KEY_ID: str | None = Field(
+        None,
+        description="AWS access key ID (optional if using IAM role or credentials file)"
+    )
+    AWS_SECRET_ACCESS_KEY: str | None = Field(
+        None,
+        description="AWS secret access key (optional if using IAM role or credentials file)"
+    )
+    
+    # File Upload Configuration
+    MAX_FILE_SIZE: int = Field(
+        default=50 * 1024 * 1024,  # 50 MB default
+        description="Maximum file size in bytes (default: 50MB)"
+    )
+    ALLOWED_MIME_TYPES: str = Field(
+        default="application/pdf",
+        description="Comma-separated list of allowed MIME types for document uploads (default: application/pdf)"
+    )
+    
+    @property
+    def allowed_mime_types_list(self) -> list[str]:
+        """
+        Parse allowed MIME types into a list.
+        
+        Supports comma-separated format: "application/pdf,image/png"
+        
+        Returns:
+            List of allowed MIME type strings
+        """
+        if not self.ALLOWED_MIME_TYPES:
+            return ["application/pdf"]  # Default to PDF only
+        
+        return [mime.strip() for mime in self.ALLOWED_MIME_TYPES.split(",") if mime.strip()]
+    
+    # OpenAI Configuration
+    # Used for generating embeddings and LLM responses
+    # Reference: https://platform.openai.com/docs/api-reference
+    OPENAI_API_KEY: str | None = Field(
+        None,
+        description="OpenAI API key for embeddings and chat completions (optional, required for document processing)"
+    )
+    OPENAI_EMBEDDING_MODEL: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model to use (default: text-embedding-3-small)"
+    )
+    OPENAI_EMBEDDING_DIMENSIONS: int = Field(
+        default=1536,
+        description="Number of dimensions for embeddings (default: 1536 for text-embedding-3-small)"
+    )
+    
+    # Document Processing Configuration
+    # Chunking settings for text processing
+    CHUNK_SIZE: int = Field(
+        default=1000,
+        description="Maximum characters per text chunk (default: 1000)"
+    )
+    CHUNK_OVERLAP: int = Field(
+        default=200,
+        description="Number of characters to overlap between chunks (default: 200)"
+    )
+    
+    # Qdrant Vector DB Configuration
+    # Qdrant is used for storing and searching document embeddings
+    # Reference: https://qdrant.tech/documentation/
+    QDRANT_URL: str = Field(
+        default="http://localhost:6333",
+        description="Qdrant server URL (default: http://localhost:6333)"
+    )
+    QDRANT_API_KEY: str | None = Field(
+        None,
+        description="Qdrant API key (optional, required for Qdrant Cloud)"
+    )
+    QDRANT_TIMEOUT: int = Field(
+        default=30,
+        description="Qdrant request timeout in seconds (default: 30)"
+    )
+    
     # Alembic Configuration
     # Used for database migrations
     # Reference: https://alembic.sqlalchemy.org/en/latest/tutorial.html

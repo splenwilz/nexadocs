@@ -53,6 +53,7 @@ async def signup(
             db=db,
             email=signup_request.email,
             password=signup_request.password,
+            organization_id=signup_request.organization_id,
             first_name=signup_request.first_name,
             last_name=signup_request.last_name
         )

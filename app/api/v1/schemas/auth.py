@@ -31,12 +31,16 @@ class SignupRequest(BaseModel):
     
     Used for public self-registration endpoint.
     Includes password validation and confirmation.
+    
+    All users must belong to an organization (tenant). The organization_id
+    is the WorkOS organization ID that the user will be added to.
     """
     email: str = Field(..., min_length=1, max_length=255, description="User email")
     password: str = Field(..., min_length=8, max_length=255, description="User password")
     confirm_password: str = Field(..., min_length=8, max_length=255, description="Password confirmation")
     first_name: Optional[str] = Field(None, max_length=255, description="User first name")
     last_name: Optional[str] = Field(None, max_length=255, description="User last name")
+    organization_id: str = Field(..., description="WorkOS organization ID - user will be added to this organization")
     
     @field_validator('password')
     def validate_password(cls, v: str) -> str:

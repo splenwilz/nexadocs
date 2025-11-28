@@ -7,9 +7,11 @@ from authlib.jose.errors import DecodeError, ExpiredTokenError, InvalidClaimErro
 from workos import WorkOSClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from fastapi import HTTPException, status
 from app.api.v1.schemas.auth import ForgotPasswordRequest, ForgotPasswordResponse, LoginResponse, RefreshTokenResponse, SignupResponse, WorkOSAuthorizationRequest, WorkOSLoginRequest, WorkOSRefreshTokenRequest, WorkOSResetPasswordRequest, WorkOsVerifyEmailRequest, WorkOSUserResponse
 from app.core.config import settings
 from app.models.user import User
+from app.services.tenant import TenantService
 
 import logging
 
@@ -21,6 +23,7 @@ class AuthService:
             api_key=settings.WORKOS_API_KEY,
             client_id=settings.WORKOS_CLIENT_ID
         )
+        self.tenant_service = TenantService()
         # Cache JWKS to avoid repeated fetches (cache for 1 hour)
         self._jwks_cache: Optional[dict] = None
         self._jwks_cache_expiry: Optional[float] = None
@@ -58,19 +61,24 @@ class AuthService:
         db: AsyncSession,
         email: str,
         password: str,
+        organization_id: str,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None
     ) -> SignupResponse:
         """
         Sign up a new user.
         
-        Creates the user in WorkOS and saves to database.
+        Creates the user in WorkOS, adds them to the organization, and saves to database.
         User must verify their email before they can login.
+        
+        All users must belong to an organization (tenant). The organization_id
+        is the WorkOS organization ID that the user will be added to.
         
         Args:
             db: Database session
             email: User email
             password: User password
+            organization_id: WorkOS organization ID (required - user will be added to this organization)
             first_name: Optional first name
             last_name: Optional last name
             
@@ -80,6 +88,7 @@ class AuthService:
         Raises:
             IntegrityError: If user already exists in database (email conflict)
             BadRequestException: If user creation fails in WorkOS (e.g., email already exists)
+            HTTPException: If organization_id is invalid or organization membership creation fails
         """
         # Check if user already exists in database BEFORE creating in WorkOS
         # This prevents creating orphaned users in WorkOS if DB insert fails
@@ -113,6 +122,61 @@ class AuthService:
             **create_user_payload
         )
         
+        # Create organization membership in WorkOS
+        # This links the user to the organization
+        # Reference: https://workos.com/docs/reference/user-management/organization-memberships
+        try:
+            workos_org_membership = await asyncio.to_thread(
+                self.workos_client.user_management.create_organization_membership,
+                user_id=workos_user.id,
+                organization_id=organization_id,
+            )
+            logger.info(f"Created organization membership for user {workos_user.id} in organization {organization_id}")
+        except Exception as org_error:
+            # If organization membership creation fails, clean up WorkOS user
+            logger.error(f"Failed to create organization membership: {org_error}")
+            try:
+                await asyncio.to_thread(
+                    self.workos_client.user_management.delete_user,
+                    user_id=workos_user.id
+                )
+                logger.info(f"Cleaned up WorkOS user {workos_user.id} after org membership failure")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to clean up WorkOS user after org membership failure: {cleanup_error}")
+            # Re-raise the original error
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to add user to organization: {str(org_error)}"
+            ) from org_error
+        
+        # Get or create tenant by WorkOS organization ID
+        # This maps the WorkOS organization to our tenant model
+        try:
+            tenant = await self.tenant_service.get_or_create_tenant_by_workos_organization_id(
+                db=db,
+                workos_organization_id=organization_id,
+                organization_name=getattr(workos_org_membership, 'organization_name', None),
+            )
+            logger.info(f"Resolved tenant {tenant.id} for WorkOS organization {organization_id}")
+        except Exception as tenant_error:
+            # If tenant creation fails, clean up WorkOS user and organization membership
+            logger.error(f"Failed to get/create tenant: {tenant_error}")
+            try:
+                # Note: WorkOS doesn't have a direct API to delete organization membership
+                # The membership will remain, but the user won't be in our database
+                await asyncio.to_thread(
+                    self.workos_client.user_management.delete_user,
+                    user_id=workos_user.id
+                )
+                logger.info(f"Cleaned up WorkOS user {workos_user.id} after tenant creation failure")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to clean up WorkOS user after tenant failure: {cleanup_error}")
+            # Re-raise the original error
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create tenant: {str(tenant_error)}"
+            ) from tenant_error
+        
         # Create user in database with error handling
         # If DB insert fails, we need to clean up the WorkOS user to prevent orphaned accounts
         # Reference: https://workos.com/docs/reference/user-management/delete-user
@@ -121,7 +185,8 @@ class AuthService:
                 id=workos_user.id,
                 email=workos_user.email,
                 first_name=workos_user.first_name,
-                last_name=workos_user.last_name
+                last_name=workos_user.last_name,
+                tenant_id=tenant.id,  # Set tenant_id from resolved tenant
             )
             db.add(user)
             await db.flush()
