@@ -14,6 +14,11 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+class WorkOSConfigError(Exception):
+    """Raised when WorkOS configuration is missing or invalid."""
+    pass
+
+
 class WorkOSOrganizationService:
     """
     Minimal client for WorkOS Organization APIs.
@@ -25,7 +30,7 @@ class WorkOSOrganizationService:
 
     def __init__(self) -> None:
         if not settings.WORKOS_API_KEY:
-            raise ValueError("WORKOS_API_KEY must be set to provision organizations")
+            raise WorkOSConfigError("WORKOS_API_KEY must be set to provision organizations")
         self._api_key = settings.WORKOS_API_KEY
 
     async def create_organization(
@@ -57,11 +62,8 @@ class WorkOSOrganizationService:
             response = await client.post(self._BASE_URL, json=payload, headers=headers)
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "WorkOS organization creation failed: %s",
-                    exc.response.text,
-                )
+            except httpx.HTTPStatusError:
+                logger.exception("WorkOS organization creation failed with non-2xx response")
                 raise
             return response.json()
 
@@ -83,11 +85,8 @@ class WorkOSOrganizationService:
             )
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "WorkOS organization deletion failed: %s",
-                    exc.response.text,
-                )
+            except httpx.HTTPStatusError:
+                logger.exception("WorkOS organization deletion failed with non-2xx response")
                 raise
 
     async def create_organization_membership(
@@ -120,11 +119,8 @@ class WorkOSOrganizationService:
             )
             try:
                 response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                logger.error(
-                    "WorkOS organization membership creation failed: %s",
-                    exc.response.text,
-                )
+            except httpx.HTTPStatusError:
+                logger.exception("WorkOS organization membership creation failed with non-2xx response")
                 raise
             return response.json()
 

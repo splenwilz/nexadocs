@@ -127,18 +127,23 @@ class TenantService:
         
         # Create new tenant
         # Generate slug from organization_name or use workos_organization_id
+        max_length = 100  # Database column limit
         if organization_name:
             # Generate slug from name: "Acme Corp" -> "acme-corp"
             slug = organization_name.lower().replace(" ", "-").replace("_", "-")
             # Remove special characters, keep only alphanumeric and hyphens
-            import re
             slug = re.sub(r'[^a-z0-9-]', '', slug)
-            # Ensure slug is not empty and not too long
-            if not slug or len(slug) > 100:
-                slug = workos_organization_id.replace("org_", "org-")[:100]
+            # Fallback to WorkOS org ID if slug ends up empty
+            if not slug:
+                slug = workos_organization_id.replace("org_", "org-")
         else:
             # Fallback: use workos_organization_id as slug (sanitized)
-            slug = workos_organization_id.replace("org_", "org-")[:100]
+            slug = workos_organization_id.replace("org_", "org-")
+        
+        # Enforce maximum length before uniqueness checks
+        # Truncate to leave room for counter suffix (e.g., "-123")
+        # Reserve space for counter to prevent infinite loop when slug is exactly max_length
+        slug = slug[:max_length]
         
         # Ensure slug is unique by appending suffix if needed
         base_slug = slug
@@ -147,7 +152,15 @@ class TenantService:
             existing = await self.get_tenant_by_slug(db, slug)
             if not existing:
                 break
-            slug = f"{base_slug}-{counter}"[:100]
+            # Append counter - if base_slug is max_length, truncate it to leave room
+            # This prevents infinite loop when base_slug is exactly 100 chars
+            if len(base_slug) >= max_length:
+                # Truncate base_slug to leave room for "-{counter}"
+                base_slug = base_slug[:max_length - len(str(counter)) - 1]
+            slug = f"{base_slug}-{counter}"
+            # Final safety check: ensure slug doesn't exceed max_length
+            if len(slug) > max_length:
+                slug = slug[:max_length]
             counter += 1
         
         tenant = Tenant(
@@ -186,7 +199,7 @@ class TenantService:
         
         # Filter out inactive tenants unless explicitly requested
         if not include_inactive:
-            query = query.where(Tenant.is_active == True)
+            query = query.where(Tenant.is_active.is_(True))
         
         # Apply pagination
         query = query.offset(skip).limit(limit)
@@ -288,11 +301,20 @@ class TenantService:
     async def _generate_unique_slug(self, db: AsyncSession, base_slug: str) -> str:
         """
         Sanitize and deduplicate slugs for automated provisioning.
+        
+        Enforces max_length (100) to match database column limit and prevent
+        potential database errors. This ensures consistency with other slug
+        generation methods.
         """
+        max_length = 100  # Database column limit (matches Tenant.slug String(100))
         slug = re.sub(r"[^a-z0-9-]", "-", base_slug) or f"tenant-{uuid.uuid4().hex[:8]}"
         slug = slug.strip("-")
         if not slug:
             slug = f"tenant-{uuid.uuid4().hex[:8]}"
+        
+        # Enforce maximum length before uniqueness checks
+        # Truncate to leave room for counter suffix (e.g., "-123")
+        slug = slug[:max_length]
 
         candidate = slug
         counter = 1
@@ -300,7 +322,14 @@ class TenantService:
             existing = await self.get_tenant_by_slug(db, candidate)
             if not existing:
                 return candidate
+            # Append counter - if slug is max_length, truncate it to leave room
+            # This prevents infinite loop when slug is exactly 100 chars
+            if len(slug) >= max_length:
+                slug = slug[:max_length - len(str(counter)) - 1]
             candidate = f"{slug}-{counter}"
+            # Final safety check: ensure candidate doesn't exceed max_length
+            if len(candidate) > max_length:
+                candidate = candidate[:max_length]
             counter += 1
     
     async def update_tenant(
