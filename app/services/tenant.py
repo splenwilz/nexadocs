@@ -305,7 +305,11 @@ class TenantService:
         generation methods.
         """
         max_length = 100  # Database column limit (matches Tenant.slug String(100))
-        slug = re.sub(r"[^a-z0-9-]", "-", base_slug) or f"tenant-{uuid.uuid4().hex[:8]}"
+        # Normalize to lowercase for consistent slug generation
+        normalized = base_slug.lower().strip()
+        # Replace non-alphanumeric chars with hyphens and collapse consecutive hyphens
+        # Using [^a-z0-9-]+ (with +) collapses consecutive non-alphanumeric chars into single hyphen
+        slug = re.sub(r"[^a-z0-9-]+", "-", normalized) or f"tenant-{uuid.uuid4().hex[:8]}"
         slug = slug.strip("-")
         if not slug:
             slug = f"tenant-{uuid.uuid4().hex[:8]}"
@@ -426,7 +430,17 @@ class TenantService:
             logger.info(f"Deleted Qdrant collection for tenant: {tenant_id}")
         except Exception as e:
             logger.error(f"Failed to delete Qdrant collection for tenant {tenant_id}: {e}", exc_info=True)
+            logger.critical(
+                f"CRITICAL: Failed to delete Qdrant collection for tenant {tenant_id}. "
+                f"Orphaned vectors will remain in Qdrant. Manual cleanup required. Error: {e}",
+                exc_info=True,
+                extra={"tenant_id": str(tenant_id), "orphaned_collection": True}
+            )
             # Continue with database deletion even if Qdrant deletion fails
+            # Note: This creates orphaned data in Qdrant. Consider implementing:
+            # - Retry mechanism for Qdrant deletion
+            # - Periodic cleanup job to detect and remove orphaned collections
+            # - Alternative flow: mark tenant for deletion, delete Qdrant, then finalize DB deletion
         
         # Delete tenant (cascade will handle related records)
         await db.delete(tenant)
