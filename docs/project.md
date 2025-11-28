@@ -37,6 +37,18 @@ User & Tenant Management
 
 ⸻
 
+Tenant Onboarding (Automated)
+	•	Admin can provision a new tenant via `POST /api/v1/tenants/provision`
+	•	This endpoint automatically:
+		- Creates a WorkOS organization with the provided name and optional domains
+		- Creates a tenant record in the database linked to the WorkOS organization
+		- Auto-generates a unique slug from the tenant name
+	•	When users sign up with the WorkOS organization ID, they are automatically linked to the provisioned tenant
+	•	Eliminates the need to manually create WorkOS organizations and copy IDs
+	•	Reference: https://workos.com/docs/reference/authkit/authentication-errors/organization-authentication-required-error#create-an-organization
+
+⸻
+
 Tech Stack Preferences
 	•	Backend: Python + FastAPI
 	•	Frontend: Next.js or lightweight HTML/JS

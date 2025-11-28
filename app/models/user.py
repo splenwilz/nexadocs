@@ -81,7 +81,7 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
-    
+
     def __repr__(self) -> str:
         """String representation for debugging"""
         return f"<User(id={self.id}, email='{self.email}', tenant_id={self.tenant_id}, created_at={self.created_at})>"

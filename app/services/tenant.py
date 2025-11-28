@@ -4,9 +4,10 @@ Handles tenant CRUD operations and validation
 Reference: https://docs.sqlalchemy.org/en/20/orm/session_basics.html
 """
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.tenant import Tenant
 from app.api.v1.schemas.tenant import TenantCreate, TenantUpdate
 from app.services.vector_db import VectorDBService
+from app.services.workos_org import WorkOSOrganizationService
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,7 @@ class TenantService:
     def __init__(self):
         """Initialize tenant service"""
         self.vector_db = VectorDBService()
+        self.workos_orgs = WorkOSOrganizationService()
     
     async def get_tenant(
         self,
@@ -224,6 +227,59 @@ class TenantService:
         
         logger.info(f"Created tenant: {tenant.id} ({tenant.name})")
         return tenant
+
+    async def provision_tenant(
+        self,
+        db: AsyncSession,
+        name: str,
+        domains: Sequence[str] | None = None,
+    ) -> Tenant:
+        """
+        Create a tenant and a backing WorkOS organization.
+
+        Reference: https://workos.com/docs/reference/authkit/authentication-errors/organization-authentication-required-error
+        """
+        # Generate a unique slug automatically so callers do not need to supply one.
+        slug_seed = name.lower().strip()
+        unique_slug = await self._generate_unique_slug(db, slug_seed)
+
+        # Provision the WorkOS organization before writing to our DB.
+        workos_org = await self.workos_orgs.create_organization(name=name, domains=domains)
+
+        tenant = Tenant(
+            name=name,
+            slug=unique_slug,
+            workos_organization_id=workos_org["id"],
+            is_active=True,
+        )
+
+        db.add(tenant)
+        await db.flush()
+
+        logger.info(
+            "Provisioned tenant %s with WorkOS org %s",
+            tenant.id,
+            workos_org["id"],
+        )
+        return tenant
+
+    async def _generate_unique_slug(self, db: AsyncSession, base_slug: str) -> str:
+        """
+        Sanitize and deduplicate slugs for automated provisioning.
+        """
+        slug = re.sub(r"[^a-z0-9-]", "-", base_slug) or f"tenant-{uuid.uuid4().hex[:8]}"
+        slug = slug.strip("-")
+        if not slug:
+            slug = f"tenant-{uuid.uuid4().hex[:8]}"
+
+        candidate = slug
+        counter = 1
+        while True:
+            existing = await self.get_tenant_by_slug(db, candidate)
+            if not existing:
+                return candidate
+            candidate = f"{slug}-{counter}"
+            counter += 1
     
     async def update_tenant(
         self,

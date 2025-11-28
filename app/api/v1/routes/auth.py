@@ -54,6 +54,9 @@ async def signup(
             email=signup_request.email,
             password=signup_request.password,
             organization_id=signup_request.organization_id,
+            create_tenant=signup_request.create_tenant,
+            company_name=signup_request.company_name,
+            company_domains=signup_request.company_domains,
             first_name=signup_request.first_name,
             last_name=signup_request.last_name
         )

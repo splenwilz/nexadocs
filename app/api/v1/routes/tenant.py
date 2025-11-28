@@ -6,6 +6,7 @@ Reference: https://fastapi.tiangolo.com/tutorial/bigger-applications/
 import logging
 import uuid
 from typing import List
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
@@ -14,7 +15,7 @@ from app.core.database import get_db
 from app.core.admin import get_current_admin_user
 from app.core.tenant import get_tenant_by_id
 from app.models.tenant import Tenant
-from app.api.v1.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse
+from app.api.v1.schemas.tenant import TenantCreate, TenantUpdate, TenantResponse, TenantProvisionRequest
 from app.api.v1.schemas.auth import WorkOSUserResponse
 from app.services.tenant import TenantService
 
@@ -89,6 +90,98 @@ async def create_tenant(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating the tenant",
+        ) from e
+
+
+@router.post(
+    "/provision",
+    response_model=TenantResponse,
+    summary="Provision tenant with WorkOS organization",
+    description="Automatically create a new tenant and WorkOS organization (admin only)",
+    status_code=status.HTTP_201_CREATED,
+)
+async def provision_tenant(
+    provision_data: TenantProvisionRequest,
+    admin_user: WorkOSUserResponse = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> TenantResponse:
+    """
+    Provision a new tenant with automated WorkOS organization creation (admin only)
+    
+    This endpoint automates the tenant onboarding process by:
+    1. Creating a WorkOS organization with the provided name and optional domains
+    2. Creating a tenant record in our database linked to the WorkOS organization
+    3. Auto-generating a unique slug from the tenant name
+    
+    This eliminates the need to manually create WorkOS organizations and copy IDs.
+    
+    Args:
+        provision_data: Tenant provisioning data (name, optional domains)
+        admin_user: Authenticated admin user (injected via dependency)
+        db: Database session (injected via dependency)
+        
+    Returns:
+        TenantResponse: Created tenant with WorkOS organization ID
+        
+    Raises:
+        HTTPException: 403 if user is not admin
+        HTTPException: 500 if WorkOS organization creation fails
+        HTTPException: 500 if tenant creation fails
+        
+    Reference: https://workos.com/docs/reference/authkit/authentication-errors/organization-authentication-required-error#create-an-organization
+    """
+    tenant_service = TenantService()
+    workos_org_service = tenant_service.workos_orgs
+    
+    try:
+        # Provision tenant (creates WorkOS org + tenant record)
+        tenant = await tenant_service.provision_tenant(
+            db,
+            name=provision_data.name,
+            domains=provision_data.domains,
+        )
+        
+        # Automatically add the admin user to the newly provisioned organization with admin role
+        # This allows the admin to access the tenant they just created
+        # Reference: https://workos.com/docs/reference/user-management/organization-memberships
+        try:
+            await workos_org_service.create_organization_membership(
+                user_id=admin_user.id,
+                organization_id=tenant.workos_organization_id,
+                role_slug="admin",
+            )
+            logger.info(
+                f"Added admin {admin_user.id} to provisioned organization {tenant.workos_organization_id} with admin role"
+            )
+        except Exception as membership_error:
+            # Log but don't fail the tenant creation if membership creation fails
+            # The tenant is already created, admin can be added manually later
+            logger.warning(
+                f"Failed to add admin {admin_user.id} to organization {tenant.workos_organization_id}: {membership_error}. "
+                f"Tenant was created successfully, but admin membership needs to be added manually."
+            )
+        
+        await db.commit()  # Commit transaction
+        
+        logger.info(
+            f"Admin {admin_user.id} provisioned tenant: {tenant.id} ({tenant.name}) "
+            f"with WorkOS org: {tenant.workos_organization_id}"
+        )
+        return TenantResponse.model_validate(tenant)
+        
+    except httpx.HTTPStatusError as e:
+        await db.rollback()
+        logger.error(f"WorkOS organization creation failed: {e.response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to create WorkOS organization: {e.response.text}",
+        ) from e
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Unexpected error provisioning tenant: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while provisioning the tenant",
         ) from e
 
 

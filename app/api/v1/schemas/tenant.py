@@ -135,6 +135,31 @@ class TenantUpdate(BaseModel):
         return v
 
 
+class TenantProvisionRequest(BaseModel):
+    """
+    Schema for provisioning a new tenant with WorkOS organization
+    
+    This endpoint automatically creates a WorkOS organization and links it
+    to a new tenant. The slug is auto-generated from the name.
+    
+    Attributes:
+        name: Tenant organization name (required)
+        domains: Optional list of email domains to associate with the organization
+    
+    Reference: https://workos.com/docs/reference/authkit/authentication-errors/organization-authentication-required-error#create-an-organization
+    """
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="Tenant organization name",
+    )
+    domains: Optional[list[str]] = Field(
+        None,
+        description="Optional list of email domains (e.g., ['example.com']) to associate with the WorkOS organization. Domains are created in 'unverified' state.",
+    )
+
+
 class TenantResponse(BaseModel):
     """
     Schema for tenant response
@@ -146,6 +171,7 @@ class TenantResponse(BaseModel):
         id: Tenant UUID
         name: Tenant organization name
         slug: URL-friendly identifier
+        workos_organization_id: WorkOS organization ID (if provisioned via automated flow)
         is_active: Whether tenant is active
         created_at: Timestamp when tenant was created
         updated_at: Timestamp when tenant was last updated
@@ -155,6 +181,10 @@ class TenantResponse(BaseModel):
     id: uuid.UUID = Field(..., description="Tenant UUID")
     name: str = Field(..., description="Tenant organization name")
     slug: str = Field(..., description="URL-friendly tenant identifier")
+    workos_organization_id: Optional[str] = Field(
+        None,
+        description="WorkOS organization ID (format: org_01E4ZCR3C56J083X43JQXF3JK5)",
+    )
     is_active: bool = Field(..., description="Whether tenant is active")
     created_at: datetime = Field(..., description="Timestamp when tenant was created")
     updated_at: datetime = Field(..., description="Timestamp when tenant was last updated")

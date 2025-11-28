@@ -32,15 +32,52 @@ class SignupRequest(BaseModel):
     Used for public self-registration endpoint.
     Includes password validation and confirmation.
     
-    All users must belong to an organization (tenant). The organization_id
-    is the WorkOS organization ID that the user will be added to.
+    Users can sign up in two ways:
+    1. Join existing tenant: Provide organization_id
+    2. Create new tenant: Set create_tenant=true and provide company_name
+    
+    Reference: https://workos.com/docs/reference/user-management/organization-memberships
     """
     email: str = Field(..., min_length=1, max_length=255, description="User email")
     password: str = Field(..., min_length=8, max_length=255, description="User password")
     confirm_password: str = Field(..., min_length=8, max_length=255, description="Password confirmation")
     first_name: Optional[str] = Field(None, max_length=255, description="User first name")
     last_name: Optional[str] = Field(None, max_length=255, description="User last name")
-    organization_id: str = Field(..., description="WorkOS organization ID - user will be added to this organization")
+    organization_id: Optional[str] = Field(
+        None,
+        description="WorkOS organization ID - user will be added to this organization. Required if create_tenant is false."
+    )
+    create_tenant: bool = Field(
+        False,
+        description="If true, creates a new tenant and organization. First user becomes admin. Requires company_name."
+    )
+    company_name: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        description="Company/tenant name. Required if create_tenant is true."
+    )
+    company_domains: Optional[list[str]] = Field(
+        None,
+        description="Optional list of email domains (e.g., ['company.com']) to associate with the new organization."
+    )
+    
+    @model_validator(mode='after')
+    def validate_organization_or_tenant(self) -> 'SignupRequest':
+        """
+        Validate that either organization_id is provided OR create_tenant is true with company_name.
+        
+        Ensures users either join an existing organization or create a new tenant.
+        """
+        if self.create_tenant:
+            if not self.company_name:
+                raise ValueError("company_name is required when create_tenant is true")
+            if self.organization_id:
+                raise ValueError("Cannot provide both organization_id and create_tenant=true. Choose one.")
+        else:
+            if not self.organization_id:
+                raise ValueError("Either organization_id must be provided OR create_tenant must be true with company_name")
+        return self
     
     @field_validator('password')
     def validate_password(cls, v: str) -> str:
