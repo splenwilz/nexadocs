@@ -109,6 +109,11 @@ class TenantService:
         - name from organization_name (or default)
         - slug auto-generated from organization_name or workos_organization_id
         
+        This method is race-safe: if multiple concurrent requests try to create
+        a tenant for the same WorkOS organization, only one will succeed. The others
+        will catch IntegrityError, rollback, and return the tenant created by the
+        first request.
+        
         Args:
             db: Database session
             workos_organization_id: WorkOS organization ID (format: "org_01E4ZCR3C56J083X43JQXF3JK5")
@@ -118,7 +123,7 @@ class TenantService:
             Tenant: Existing or newly created tenant
             
         Raises:
-            IntegrityError: If slug conflict occurs (shouldn't happen with auto-generated slugs)
+            IntegrityError: If both workos_organization_id and slug conflict (very rare edge case)
         """
         # Try to get existing tenant
         tenant = await self.get_tenant_by_workos_organization_id(db, workos_organization_id)
@@ -171,7 +176,24 @@ class TenantService:
         )
         
         db.add(tenant)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError:
+            # Race condition: another request created the tenant concurrently
+            # Rollback this transaction and return the existing tenant
+            await db.rollback()
+            logger.info(
+                f"Tenant creation race condition detected for WorkOS org {workos_organization_id}. "
+                f"Re-querying for existing tenant."
+            )
+            # Re-query to get the tenant created by the other request
+            existing_tenant = await self.get_tenant_by_workos_organization_id(db, workos_organization_id)
+            if existing_tenant:
+                logger.info(f"Returning existing tenant {existing_tenant.id} created by concurrent request")
+                return existing_tenant
+            # If tenant still doesn't exist after rollback, re-raise the IntegrityError
+            # This handles the edge case where both workos_organization_id and slug conflict
+            raise
         
         logger.info(f"Created tenant: {tenant.id} ({tenant.name}) for WorkOS organization {workos_organization_id}")
         return tenant
