@@ -7,9 +7,11 @@ from authlib.jose.errors import DecodeError, ExpiredTokenError, InvalidClaimErro
 from workos import WorkOSClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from fastapi import HTTPException, status
 from app.api.v1.schemas.auth import ForgotPasswordRequest, ForgotPasswordResponse, LoginResponse, RefreshTokenResponse, SignupResponse, WorkOSAuthorizationRequest, WorkOSLoginRequest, WorkOSRefreshTokenRequest, WorkOSResetPasswordRequest, WorkOsVerifyEmailRequest, WorkOSUserResponse
 from app.core.config import settings
 from app.models.user import User
+from app.services.tenant import TenantService
 
 import logging
 
@@ -21,6 +23,7 @@ class AuthService:
             api_key=settings.WORKOS_API_KEY,
             client_id=settings.WORKOS_CLIENT_ID
         )
+        self.tenant_service = TenantService()
         # Cache JWKS to avoid repeated fetches (cache for 1 hour)
         self._jwks_cache: Optional[dict] = None
         self._jwks_cache_expiry: Optional[float] = None
@@ -58,19 +61,33 @@ class AuthService:
         db: AsyncSession,
         email: str,
         password: str,
+        organization_id: Optional[str] = None,
+        create_tenant: bool = False,
+        company_name: Optional[str] = None,
+        company_domains: Optional[list[str]] = None,
         first_name: Optional[str] = None,
         last_name: Optional[str] = None
     ) -> SignupResponse:
         """
         Sign up a new user.
         
-        Creates the user in WorkOS and saves to database.
+        Supports two flows:
+        1. Join existing tenant: Provide organization_id
+        2. Create new tenant: Set create_tenant=true with company_name (self-serve onboarding)
+        
+        Creates the user in WorkOS, adds them to the organization, and saves to database.
         User must verify their email before they can login.
+        
+        If create_tenant=true, the first user becomes admin of the new tenant.
         
         Args:
             db: Database session
             email: User email
             password: User password
+            organization_id: WorkOS organization ID (required if create_tenant is false)
+            create_tenant: If true, creates a new tenant and organization
+            company_name: Company/tenant name (required if create_tenant is true)
+            company_domains: Optional list of email domains for new organization
             first_name: Optional first name
             last_name: Optional last name
             
@@ -80,6 +97,7 @@ class AuthService:
         Raises:
             IntegrityError: If user already exists in database (email conflict)
             BadRequestException: If user creation fails in WorkOS (e.g., email already exists)
+            HTTPException: If organization_id is invalid or organization membership creation fails
         """
         # Check if user already exists in database BEFORE creating in WorkOS
         # This prevents creating orphaned users in WorkOS if DB insert fails
@@ -95,6 +113,24 @@ class AuthService:
                 statement="INSERT INTO users",
                 params=None,
                 orig=Exception("duplicate key value violates unique constraint \"ix_users_email\"")
+            )
+        
+        # Handle self-serve tenant creation flow
+        # Note: We'll create the tenant after creating the user, so we can add the user to the org
+        # For now, we'll set organization_id to None and handle it after user creation
+        is_self_serve = create_tenant
+        if is_self_serve:
+            if not company_name:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="company_name is required when create_tenant is true"
+                )
+        
+        # Validate organization_id is provided (unless creating new tenant)
+        if not is_self_serve and not organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="organization_id is required. Either provide it directly or set create_tenant=true with company_name"
             )
         
         # Create user in WorkOS (only if not in database)
@@ -113,6 +149,108 @@ class AuthService:
             **create_user_payload
         )
         
+        # Handle self-serve tenant creation: Create organization and tenant first
+        if is_self_serve:
+            try:
+                # Provision tenant (creates WorkOS org + tenant record)
+                tenant = await self.tenant_service.provision_tenant(
+                    db=db,
+                    name=company_name,
+                    domains=company_domains,
+                )
+                organization_id = tenant.workos_organization_id
+                logger.info(f"Provisioned new tenant {tenant.id} for self-serve signup: {company_name}")
+            except Exception as tenant_error:
+                # Clean up WorkOS user if tenant creation fails
+                logger.error(f"Failed to provision tenant for self-serve signup: {tenant_error}")
+                try:
+                    await asyncio.to_thread(
+                        self.workos_client.user_management.delete_user,
+                        user_id=workos_user.id
+                    )
+                    logger.info(f"Cleaned up WorkOS user {workos_user.id} after tenant provisioning failure")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up WorkOS user after tenant failure: {cleanup_error}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to create tenant: {str(tenant_error)}"
+                ) from tenant_error
+        
+        # Create organization membership in WorkOS
+        # This links the user to the organization
+        # Reference: https://workos.com/docs/reference/user-management/organization-memberships
+        try:
+            # If creating new tenant, first user gets admin role
+            role_slug = "admin" if is_self_serve else None
+            workos_org_membership = await asyncio.to_thread(
+                self.workos_client.user_management.create_organization_membership,
+                user_id=workos_user.id,
+                organization_id=organization_id,
+                role_slug=role_slug,
+            )
+            logger.info(
+                f"Created organization membership for user {workos_user.id} in organization {organization_id} "
+                f"with role: {role_slug or 'member'}"
+            )
+        except Exception as org_error:
+            # If organization membership creation fails, clean up WorkOS user and tenant (if self-serve)
+            logger.error(f"Failed to create organization membership: {org_error}")
+            if is_self_serve:
+                # Clean up tenant if it was created
+                try:
+                    await self.tenant_service.delete_tenant(db, tenant.id)
+                    logger.info(f"Cleaned up tenant {tenant.id} after org membership failure")
+                except Exception as tenant_cleanup_error:
+                    logger.error(f"Failed to clean up tenant after org membership failure: {tenant_cleanup_error}")
+            try:
+                await asyncio.to_thread(
+                    self.workos_client.user_management.delete_user,
+                    user_id=workos_user.id
+                )
+                logger.info(f"Cleaned up WorkOS user {workos_user.id} after org membership failure")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to clean up WorkOS user after org membership failure: {cleanup_error}")
+            # Re-raise the original error
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Failed to add user to organization: {str(org_error)}"
+            ) from org_error
+        
+        # Get or create tenant by WorkOS organization ID (for existing organization flow)
+        if not is_self_serve:
+            try:
+                tenant = await self.tenant_service.get_or_create_tenant_by_workos_organization_id(
+                    db=db,
+                    workos_organization_id=organization_id,
+                    organization_name=getattr(workos_org_membership, 'organization_name', None),
+                )
+                logger.info(f"Resolved tenant {tenant.id} for WorkOS organization {organization_id}")
+            except Exception as tenant_error:
+                # If tenant creation fails, clean up WorkOS organization membership and user
+                logger.error(f"Failed to get/create tenant: {tenant_error}")
+                try:
+                    # Delete organization membership first to prevent orphaned records
+                    # Reference: https://workos.com/docs/reference/user-management/organization-memberships
+                    if hasattr(workos_org_membership, 'id'):
+                        await asyncio.to_thread(
+                            self.workos_client.user_management.delete_organization_membership,
+                            organization_membership_id=workos_org_membership.id
+                        )
+                        logger.info(f"Deleted organization membership {workos_org_membership.id} after tenant creation failure")
+                    # Then delete the user
+                    await asyncio.to_thread(
+                        self.workos_client.user_management.delete_user,
+                        user_id=workos_user.id
+                    )
+                    logger.info(f"Cleaned up WorkOS user {workos_user.id} after tenant creation failure")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up WorkOS resources after tenant failure: {cleanup_error}")
+                # Re-raise the original error
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to create tenant: {str(tenant_error)}"
+                ) from tenant_error
+        
         # Create user in database with error handling
         # If DB insert fails, we need to clean up the WorkOS user to prevent orphaned accounts
         # Reference: https://workos.com/docs/reference/user-management/delete-user
@@ -121,18 +259,29 @@ class AuthService:
                 id=workos_user.id,
                 email=workos_user.email,
                 first_name=workos_user.first_name,
-                last_name=workos_user.last_name
+                last_name=workos_user.last_name,
+                tenant_id=tenant.id,  # Set tenant_id from resolved tenant
             )
             db.add(user)
             await db.flush()
         except Exception as db_error:
-            # Database operation failed - clean up WorkOS user to prevent orphaned account
+            # Database operation failed - clean up WorkOS organization membership and user
             # This prevents users from being locked out if DB insert fails (race condition, connection issue, etc.)
+            # and prevents orphaned organization memberships
             logger.warning(
                 f"Database insert failed after WorkOS user creation for {email}. "
-                f"Cleaning up WorkOS user {workos_user.id}. Error: {db_error}"
+                f"Cleaning up WorkOS resources for user {workos_user.id}. Error: {db_error}"
             )
             try:
+                # Delete organization membership first to prevent orphaned records
+                # Reference: https://workos.com/docs/reference/user-management/organization-memberships
+                if hasattr(workos_org_membership, 'id'):
+                    await asyncio.to_thread(
+                        self.workos_client.user_management.delete_organization_membership,
+                        organization_membership_id=workos_org_membership.id
+                    )
+                    logger.info(f"Deleted organization membership {workos_org_membership.id} after DB failure")
+                # Then delete the user
                 await asyncio.to_thread(
                     self.workos_client.user_management.delete_user,
                     user_id=workos_user.id
@@ -141,7 +290,7 @@ class AuthService:
             except Exception as cleanup_error:
                 # Log cleanup failure but don't mask the original error
                 logger.error(
-                    f"Failed to clean up WorkOS user {workos_user.id} after DB failure. "
+                    f"Failed to clean up WorkOS resources for user {workos_user.id} after DB failure. "
                     f"Cleanup error: {cleanup_error}. Original error: {db_error}",
                     exc_info=True
                 )

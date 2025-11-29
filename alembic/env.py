@@ -11,7 +11,17 @@ from alembic import context
 
 # Import Base and models for autogenerate support
 from app.core.database import Base
-from app.models import Task, User  # Import all models here so Alembic can detect them
+# Import all models so Alembic can detect them for autogenerate
+from app.models import (
+    Task,
+    User,
+    Tenant,
+    Document,
+    DocumentStatus,
+    Conversation,
+    Message,
+    ValidatedAnswer,
+)
 
 # This is the Alembic Config object
 config = context.config
