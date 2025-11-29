@@ -138,10 +138,11 @@ nexadocs/
 │       ├── rag.py                # RAG pipeline
 │       └── chat.py               # Chat service
 ├── docs/                         # Documentation
-│   ├── project.md                # Project requirements
-│   ├── TENANT_ONBOARDING_FLOW.md
-│   ├── SELF_SERVE_SIGNUP.md
-│   └── COMPLETE_FLOW_SUMMARY.md
+│   ├── tenant_onboarding_flow.md
+│   ├── self_serve_signup.md
+│   ├── complete_flow_summary.md
+│   ├── admin_user_setup.md
+│   └── workos_jwt_template.md
 ├── alembic/                      # Database migrations
 └── pyproject.toml                # Dependencies
 ```
@@ -415,11 +416,10 @@ Every user belongs to a **tenant** (company/organization). All data is strictly 
 
 ## Documentation
 
-- **[Project Requirements](docs/project.md)**: Full project scope and requirements
-- **[Tenant Onboarding Flow](docs/TENANT_ONBOARDING_FLOW.md)**: Complete tenant provisioning guide
-- **[Self-Serve Signup](docs/SELF_SERVE_SIGNUP.md)**: Self-serve tenant creation documentation
-- **[Complete Flow Summary](docs/COMPLETE_FLOW_SUMMARY.md)**: All user flows explained
-- **[Admin Setup](docs/ADMIN_USER_SETUP.md)**: Admin user bootstrap guide
+- **[Tenant Onboarding Flow](docs/tenant_onboarding_flow.md)**: Complete tenant provisioning guide
+- **[Self-Serve Signup](docs/self_serve_signup.md)**: Self-serve tenant creation documentation
+- **[Complete Flow Summary](docs/complete_flow_summary.md)**: All user flows explained
+- **[Admin Setup](docs/admin_user_setup.md)**: Admin user bootstrap guide
 
 ## Deployment
 
