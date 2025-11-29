@@ -3,10 +3,12 @@ OpenAI embeddings service
 Generates vector embeddings for text chunks
 Reference: https://platform.openai.com/docs/guides/embeddings
 """
+import asyncio
 import logging
 import time
 from typing import List
 from openai import AsyncOpenAI  # Use async client for better performance
+import httpx
 
 from app.core.config import settings
 
@@ -30,11 +32,27 @@ class EmbeddingsService:
                 "OPENAI_API_KEY is required for document processing. "
                 "Please set OPENAI_API_KEY in your .env file."
             )
-        # Use AsyncOpenAI for better async performance (no thread pool overhead)
+        # Configure httpx client with increased timeout for large batches
+        # Reference: https://www.python-httpx.org/api/#timeouts
+        timeout = httpx.Timeout(
+            connect=30.0,  # Time to establish connection
+            read=settings.OPENAI_TIMEOUT,  # Time to read response (configurable for large batches)
+            write=30.0,  # Time to write request
+            pool=30.0,  # Time to get connection from pool
+        )
+        http_client = httpx.AsyncClient(timeout=timeout)
+        
+        # Use AsyncOpenAI with custom httpx client for timeout configuration
         # Reference: https://github.com/openai/openai-python#async-usage
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        # Reference: https://github.com/openai/openai-python/blob/main/src/openai/_client.py#L100
+        self.client = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=http_client,
+            max_retries=settings.OPENAI_MAX_RETRIES,
+        )
         self.model = settings.OPENAI_EMBEDDING_MODEL
         self.dimensions = settings.OPENAI_EMBEDDING_DIMENSIONS
+        self.max_retries = settings.OPENAI_MAX_RETRIES
     
     async def generate_embedding(self, text: str) -> List[float]:
         """
@@ -82,8 +100,9 @@ class EmbeddingsService:
         try:
             total_start = time.time()
             # OpenAI API supports batch processing
+            # Use smaller batch size for very large documents to prevent timeouts
             # Max batch size is typically 2048, but we'll use smaller batches for reliability
-            batch_size = 100
+            batch_size = 50 if len(texts) > 200 else 100  # Smaller batches for large documents
             all_embeddings = []
             num_batches = (len(texts) + batch_size - 1) // batch_size
             
@@ -92,18 +111,43 @@ class EmbeddingsService:
                 batch_num = i // batch_size + 1
                 logger.debug(f"Generating embeddings for batch {batch_num}/{num_batches} ({len(batch)} texts)")
                 
-                batch_start = time.time()
-                response = await self.client.embeddings.create(
-                    model=self.model,
-                    input=batch,
-                    dimensions=self.dimensions,
-                )
-                batch_time = time.time() - batch_start
-                print(f"[PERF] Embeddings: Batch {batch_num}/{num_batches}: {batch_time:.3f}s ({len(batch)} texts)")
-                
-                # Extract embeddings in order
-                batch_embeddings = [item.embedding for item in response.data]
-                all_embeddings.extend(batch_embeddings)
+                # Retry logic with exponential backoff
+                last_exception = None
+                for attempt in range(self.max_retries + 1):
+                    try:
+                        batch_start = time.time()
+                        response = await self.client.embeddings.create(
+                            model=self.model,
+                            input=batch,
+                            dimensions=self.dimensions,
+                        )
+                        batch_time = time.time() - batch_start
+                        print(f"[PERF] Embeddings: Batch {batch_num}/{num_batches}: {batch_time:.3f}s ({len(batch)} texts)")
+                        
+                        # Extract embeddings in order
+                        batch_embeddings = [item.embedding for item in response.data]
+                        all_embeddings.extend(batch_embeddings)
+                        break  # Success, exit retry loop
+                        
+                    except Exception as e:
+                        last_exception = e
+                        if attempt < self.max_retries:
+                            # Exponential backoff: wait 2^attempt seconds
+                            wait_time = 2 ** attempt
+                            logger.warning(
+                                f"Embedding generation failed for batch {batch_num}/{num_batches} "
+                                f"(attempt {attempt + 1}/{self.max_retries + 1}): {e}. "
+                                f"Retrying in {wait_time}s..."
+                            )
+                            await asyncio.sleep(wait_time)
+                        else:
+                            # Final attempt failed
+                            logger.error(
+                                f"Failed to generate embeddings for batch {batch_num}/{num_batches} "
+                                f"after {self.max_retries + 1} attempts: {e}",
+                                exc_info=True
+                            )
+                            raise Exception(f"Failed to generate embeddings batch after {self.max_retries + 1} attempts: {e}") from e
             
             total_time = time.time() - total_start
             avg_time_per_text = total_time / len(texts) if texts else 0

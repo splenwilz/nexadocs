@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="A clean architecture FastAPI starter with PostgreSQL and Alembic",
+    description="A multi-tenant AI knowledge assistant that allows each client (tenant) to upload their own documents, ask questions, and receive AI-powered answers based strictly on their own document set.",
     docs_url="/docs",  # Swagger UI documentation
     redoc_url="/redoc",  # ReDoc documentation
     lifespan=lifespan,  # Add lifespan for startup/shutdown events

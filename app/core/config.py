@@ -146,6 +146,14 @@ class Settings(BaseSettings):
         default=1536,
         description="Number of dimensions for embeddings (default: 1536 for text-embedding-3-small)"
     )
+    OPENAI_TIMEOUT: int = Field(
+        default=300,
+        description="OpenAI API request timeout in seconds (default: 300 for large batches)"
+    )
+    OPENAI_MAX_RETRIES: int = Field(
+        default=3,
+        description="Maximum number of retries for OpenAI API requests (default: 3)"
+    )
     
     # Document Processing Configuration
     # Chunking settings for text processing

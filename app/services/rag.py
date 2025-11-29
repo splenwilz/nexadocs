@@ -8,6 +8,7 @@ import logging
 import uuid
 from typing import List, Dict, Optional
 from openai import AsyncOpenAI  # Use async client for better performance
+import httpx
 
 from app.core.config import settings
 from app.services.embeddings import EmbeddingsService
@@ -31,9 +32,24 @@ class RAGService:
         """Initialize RAG service with required services"""
         self.embeddings_service = EmbeddingsService()
         self.vector_db = VectorDBService()
-        # Use AsyncOpenAI for better async performance (no thread pool overhead)
+        
+        # Configure httpx client with timeout for LLM requests
+        # Reference: https://www.python-httpx.org/api/#timeouts
+        timeout = httpx.Timeout(
+            connect=30.0,
+            read=settings.OPENAI_TIMEOUT,
+            write=30.0,
+            pool=30.0,
+        )
+        http_client = httpx.AsyncClient(timeout=timeout)
+        
+        # Use AsyncOpenAI with custom httpx client for timeout configuration
         # Reference: https://github.com/openai/openai-python#async-usage
-        self.llm_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.llm_client = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=http_client,
+            max_retries=settings.OPENAI_MAX_RETRIES,
+        )
         self.llm_model = "gpt-4o-mini"  # Cost-effective model for RAG
         self.max_tokens = 600  # Reduced from 1000 for faster responses (optimization)
         self.max_context_length = 3000  # Limit context to ~3000 chars to reduce input tokens
