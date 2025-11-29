@@ -1,8 +1,6 @@
 # NexaDocs - Multi-Tenant AI Knowledge Assistant
 
-A production-ready multi-tenant AI knowledge assistant that allows each client (tenant) to upload their own documents, ask questions, and receive AI-powered answers based strictly on their own document set.
-
-## What This Project Does
+A multi-tenant AI knowledge assistant that allows each client (tenant) to upload their own documents, ask questions, and receive AI-powered answers based strictly on their own document set.
 
 NexaDocs is a **multi-tenant AI knowledge assistant** that provides:
 
@@ -52,14 +50,14 @@ NexaDocs is a **multi-tenant AI knowledge assistant** that provides:
 
 ### User Flows
 
-1. **Company Founder Signs Up**:
-   - Founder signs up with `create_tenant=true` and company name
+1. **Company Signs Up**:
+   - Company signs up with `create_tenant=true` and company name
    - System automatically creates WorkOS organization and tenant
-   - Founder becomes admin of their tenant
+   - Company becomes admin of their tenant
    - No manual steps required
 
 2. **Team Members Join**:
-   - Team members sign up with the organization ID (from founder)
+   - Team members sign up with the organization ID (from Company)
    - Automatically linked to the same tenant
    - Can upload documents and chat with AI
 

@@ -7,7 +7,6 @@ All SQLAlchemy models should be defined here or imported here
 from app.core.database import Base
 
 # Import models here as they are created
-from app.models.task import Task
 from app.models.user import User
 from app.models.tenant import Tenant
 from app.models.document import Document, DocumentStatus
@@ -18,7 +17,6 @@ from app.models.validated_answer import ValidatedAnswer
 # Export all models for easy imports
 __all__ = [
     "Base",
-    "Task",
     "User",
     "Tenant",
     "Document",
